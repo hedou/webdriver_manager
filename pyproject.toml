@@ -1,14 +1,47 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "webdriver-manager"
-version = "4.0.3"
-description = "Add your description here"
+version = "4.1.2"
+description = "Library provides the way to automatically manage drivers for different browsers"
 readme = "README.md"
 requires-python = ">=3.7"
+license = "Apache-2.0"
+authors = [
+    { name = "Sergey Pirogov", email = "automationremarks@gmail.com" },
+]
+keywords = ["testing", "selenium", "driver", "test automation"]
+urls = { Homepage = "https://github.com/SergeyPirogov/webdriver_manager", Repository = "https://github.com/SergeyPirogov/webdriver_manager" }
+classifiers = [
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Operating System :: Unix",
+    "Operating System :: MacOS",
+]
 dependencies = [
     "requests",
     "python-dotenv",
     "packaging",
 ]
+
+[tool.setuptools.packages.find]
+include = ["webdriver_manager*"]
+
+[tool.setuptools.package-data]
+webdriver_manager = ["py.typed"]
 
 [dependency-groups]
 dev = [
@@ -17,8 +50,12 @@ dev = [
     "pytest-cov",
     "bump2version",
     "pytest-xdist",
-    "pybrowsers",
+    "pybrowsers<1.4.0; python_version >= '3.9'",
     "mock",
 ]
 
 [tool.uv.sources]
+
+[tool.pytest.ini_options]
+addopts = "--color=yes --cov=webdriver_manager --cov-report=term-missing"
+console_output_style = "progress"

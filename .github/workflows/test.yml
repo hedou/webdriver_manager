@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - CHANGELOG.md
       - README.md
+      - RELEASING.md
       - LICENSE
       - LICENSE.txt
       - release-process.rst
@@ -24,6 +25,7 @@ on:
     paths-ignore:
       - CHANGELOG.md
       - README.md
+      - RELEASING.md
       - LICENSE
       - LICENSE.txt
       - release-process.rst
@@ -36,6 +38,10 @@ on:
       - setup.py
       - webdriver_manager/__init__.py
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -44,33 +50,53 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11']
+        python-version: ['3.12']
         selenium-version: ['4.10.0']
         os: [ windows-latest ]
         wdm-log: ['']
         include:
-          - python-version: '3.11'
+          - python-version: '3.7'
+            selenium-version: '4.10.0'
+            os: ubuntu-22.04
+          - python-version: '3.13'
             selenium-version: '4.10.0'
             os: ubuntu-latest
-          - python-version: '3.11'
+          - python-version: '3.14'
             selenium-version: '4.10.0'
             os: macos-latest
             wdm-log: '0'
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Install Chromium on Linux
+        if: runner.os == 'Linux'
+        id: setup-chromium
+        uses: browser-actions/setup-chrome@v2
+        with:
+          # "latest" is resolved from Chromium Snapshots, not stable Google Chrome.
+          chrome-version: latest
+          install-dependencies: true
+
+      - name: Install Chromium on MacOS
+        if: startsWith(runner.os, 'macOS')
+        id: setup-chromium-macos
+        uses: browser-actions/setup-chrome@v2
+        with:
+          # "latest" is resolved from Chromium Snapshots, not stable Google Chrome.
+          chrome-version: latest
 
       - name: Install browsers on Linux
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install software-properties-common apt-transport-https wget curl
-          
+          sudo apt-get install -y software-properties-common apt-transport-https wget curl xvfb
+
           wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo dpkg -i google-chrome-stable_current_amd64.deb
           
@@ -83,7 +109,8 @@ jobs:
           sudo apt-get update
           sudo apt-get -y --no-install-recommends install opera-stable
           
-          sudo apt-get install chromium-browser
+          sudo ln -sf "${{ steps.setup-chromium.outputs.chrome-path }}" /usr/local/bin/chromium
+          chromium --version
           
           sudo curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main"|sudo tee /etc/apt/sources.list.d/brave-browser-release.list
@@ -103,15 +130,32 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          choco install chromium opera brave googlechrome --no-progress -y --force
+          choco install chromium opera brave --no-progress -y --force
+
+          $chromePaths = @(
+            "$env:PROGRAMFILES\Google\Chrome\Application\chrome.exe",
+            "${env:PROGRAMFILES(X86)}\Google\Chrome\Application\chrome.exe",
+            "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+          )
+          $chromePath = $chromePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $chromePath) {
+            choco install googlechrome --no-progress -y --force
+          }
 
       - name: Install browsers on MacOS
         if: startsWith(runner.os, 'macOS')
         run: |
-          brew tap domt4/chromium
           brew update
-          brew install --cask mac-chromium opera brave-browser
+          brew install --cask opera brave-browser
           brew upgrade google-chrome
+          chromium_bin="${{ steps.setup-chromium-macos.outputs.chrome-path }}"
+          if [[ "$chromium_bin" != */Chromium.app/Contents/MacOS/Chromium ]]; then
+            echo "Unexpected Chromium path: $chromium_bin" >&2
+            exit 1
+          fi
+          sudo rm -rf /Applications/Chromium.app
+          sudo cp -R "${chromium_bin%/Contents/MacOS/Chromium}" /Applications/Chromium.app
+          /Applications/Chromium.app/Contents/MacOS/Chromium --version
 
       - name: Install Python dependencies
         run: |
@@ -124,27 +168,80 @@ jobs:
         if: runner.os == 'Linux'
         env:
           WDM_LOG: ${{ matrix.wdm-log }}
-        uses: coactions/setup-xvfb@v1
-        with:
-          run: |
-            pipenv run py.test -sv --cov-config .coveragerc --cov-report xml --cov-report term:skip-covered --cov=webdriver_manager --tb=short tests/
+        run: |
+          xvfb-run -a pipenv run py.test -s \
+            -o console_output_style=progress \
+            -o log_cli=false \
+            -v \
+            --cov-config .coveragerc \
+            --cov-report xml \
+            --cov-report term:skip-covered \
+            --cov=webdriver_manager \
+            --tb=short \
+            tests/
 
       - name: Run tests on Windows (without xvfb)
         if: runner.os == 'Windows'
         run: |
-          pipenv run py.test -sv --cov-config .coveragerc --cov-report xml --cov-report term:skip-covered --cov=webdriver_manager --tb=short tests/
+          pipenv run py.test -s -o console_output_style=progress -o log_cli=false -v --cov-config .coveragerc --cov-report xml --cov-report term:skip-covered --cov=webdriver_manager --tb=short tests/
 
       - name: Run tests on MacOS (without xvfb)
         if: startsWith(runner.os, 'macOS')
         run: |
-          pipenv run py.test -sv --cov-config .coveragerc --cov-report xml --cov-report term:skip-covered --cov=webdriver_manager --tb=short tests/
+          pipenv run py.test -s -o console_output_style=progress -o log_cli=false -v --cov-config .coveragerc --cov-report xml --cov-report term:skip-covered --cov=webdriver_manager --tb=short tests/
 
       - name: Codecov Upload
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v7
         if: always()
         with:
-          file: ./coverage.xml
+          files: ./coverage.xml
           name: ${{ matrix.os }}-py${{ matrix.python-version }}
+          use_oidc: true
+
+  test-future-python:
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: [ '3.14', '3.15' ]
+        selenium-version: [ '4.10.0' ]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
+
+      - name: Install browsers on Linux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common apt-transport-https wget curl xvfb
+
+          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo dpkg -i google-chrome-stable_current_amd64.deb
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install -U pip wheel
+          pip install pipenv
+          pipenv --python "$(which python)"
+          pipenv install --dev --skip-lock
+          pipenv install selenium==${{ matrix.selenium-version }}
+
+      - name: Run tests on Linux (future Python, non-blocking)
+        run: |
+          xvfb-run -a pipenv run py.test -s \
+            -o console_output_style=progress \
+            -o log_cli=false \
+            -v \
+            --tb=short \
+            tests/
 
   test-negative:
     runs-on: ${{ matrix.os }}
@@ -153,15 +250,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [ '3.7' ]
+        python-version: [ '3.9' ]
         selenium-version: [ '3.141.0' ]
         os: [ ubuntu-latest ]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -170,6 +267,12 @@ jobs:
           sudo apt remove firefox google-chrome-stable -y
           sudo apt autoremove && sudo apt autoclean -y
           sudo apt clean
+
+      - name: Install Xvfb
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
 
       - name: Install Python dependencies
         run: |
@@ -180,14 +283,22 @@ jobs:
 
       - name: Run tests on Linux (with xvfb)
         if: runner.os == 'Linux'
-        uses: coactions/setup-xvfb@v1
-        with:
-          run: |
-            pipenv run py.test -sv --cov-config .coveragerc --cov-report xml --cov-report term:skip-covered --cov=webdriver_manager --tb=short tests_negative/
+        run: |
+          xvfb-run -a pipenv run py.test -s \
+            -o console_output_style=progress \
+            -o log_cli=false \
+            -v \
+            --cov-config .coveragerc \
+            --cov-report xml \
+            --cov-report term:skip-covered \
+            --cov=webdriver_manager \
+            --tb=short \
+            tests_negative/
 
       - name: Codecov Upload
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v7
         if: always()
         with:
-          file: ./coverage.xml
+          files: ./coverage.xml
           name: ${{ matrix.os }}-py${{ matrix.python-version }}
+          use_oidc: true
